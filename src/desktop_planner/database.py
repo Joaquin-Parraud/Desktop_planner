@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, time
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
+from typing import Iterator, Optional
 
 from .models import Group, Task
 from .paths import database_path
@@ -20,23 +20,34 @@ from .paths import database_path
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS groups (
-    id    INTEGER PRIMARY KEY AUTOINCREMENT,
-    name  TEXT NOT NULL UNIQUE,
-    color TEXT NOT NULL DEFAULT '#3584e4'
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL UNIQUE,
+    color       TEXT NOT NULL DEFAULT '#3584e4',
+    description TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    title      TEXT NOT NULL,
-    group_id   INTEGER REFERENCES groups(id) ON DELETE SET NULL,
-    due_date   TEXT,                  -- ISO 8601 (YYYY-MM-DD) or NULL
-    completed  INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    title       TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    group_id    INTEGER REFERENCES groups(id) ON DELETE SET NULL,
+    due_date    TEXT,                  -- ISO 8601 (YYYY-MM-DD) or NULL
+    due_time    TEXT,                  -- 'HH:MM' or NULL
+    completed   INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_group    ON tasks(group_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date);
 """
+
+# Columns added after the initial schema; applied with ALTER TABLE on
+# pre-existing databases.
+MIGRATIONS: list[tuple[str, str, str]] = [
+    ("groups", "description", "TEXT NOT NULL DEFAULT ''"),
+    ("tasks", "description", "TEXT NOT NULL DEFAULT ''"),
+    ("tasks", "due_time", "TEXT"),
+]
 
 
 class Database:
@@ -44,7 +55,6 @@ class Database:
 
     def __init__(self, path: Optional[Path | str] = None):
         self.path = Path(path) if path is not None else database_path()
-        # Ensure parent dir exists for non-default paths too.
         if self.path != Path(":memory:"):
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(
@@ -54,12 +64,23 @@ class Database:
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")
         self._init_schema()
+        self._migrate()
 
     # ----- lifecycle ----------------------------------------------------
     def _init_schema(self) -> None:
-        # executescript() manages its own transaction in autocommit mode,
-        # so we call it directly rather than wrapping in _tx().
+        # executescript() manages its own transaction in autocommit mode.
         self._conn.executescript(SCHEMA)
+
+    def _migrate(self) -> None:
+        for table, column, decl in MIGRATIONS:
+            if not self._column_exists(table, column):
+                self._conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {decl}"
+                )
+
+    def _column_exists(self, table: str, column: str) -> bool:
+        cur = self._conn.execute(f"PRAGMA table_info({table})")
+        return any(row["name"] == column for row in cur.fetchall())
 
     @contextmanager
     def _tx(self) -> Iterator[sqlite3.Cursor]:
@@ -84,13 +105,16 @@ class Database:
         self.close()
 
     # ----- groups -------------------------------------------------------
-    def create_group(self, name: str, color: str = "#3584e4") -> Group:
+    def create_group(
+        self, name: str, color: str = "#3584e4", description: str = ""
+    ) -> Group:
         with self._tx() as cur:
             cur.execute(
-                "INSERT INTO groups (name, color) VALUES (?, ?)", (name, color)
+                "INSERT INTO groups (name, color, description) VALUES (?, ?, ?)",
+                (name, color, description),
             )
             gid = cur.lastrowid
-        return Group(id=gid, name=name, color=color)
+        return Group(id=gid, name=name, color=color, description=description)
 
     def list_groups(self) -> list[Group]:
         cur = self._conn.execute("SELECT * FROM groups ORDER BY name COLLATE NOCASE")
@@ -106,8 +130,8 @@ class Database:
             raise ValueError("group.id required for update")
         with self._tx() as cur:
             cur.execute(
-                "UPDATE groups SET name = ?, color = ? WHERE id = ?",
-                (group.name, group.color, group.id),
+                "UPDATE groups SET name = ?, color = ?, description = ? WHERE id = ?",
+                (group.name, group.color, group.description, group.id),
             )
 
     def delete_group(self, group_id: int) -> None:
@@ -120,14 +144,18 @@ class Database:
         title: str,
         group_id: Optional[int] = None,
         due_date: Optional[date | str] = None,
+        due_time: Optional[time | str] = None,
         completed: bool = False,
+        description: str = "",
     ) -> Task:
-        iso = _date_to_iso(due_date)
+        iso_d = _date_to_iso(due_date)
+        iso_t = _time_to_iso(due_time)
         with self._tx() as cur:
             cur.execute(
-                "INSERT INTO tasks (title, group_id, due_date, completed) "
-                "VALUES (?, ?, ?, ?)",
-                (title, group_id, iso, int(completed)),
+                "INSERT INTO tasks "
+                "(title, description, group_id, due_date, due_time, completed) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (title, description, group_id, iso_d, iso_t, int(completed)),
             )
             tid = cur.lastrowid
             row = cur.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone()
@@ -145,12 +173,7 @@ class Database:
         due_on: Optional[date | str] = None,
         sort_by_date: bool = False,
     ) -> list[Task]:
-        """List tasks. Filtering/sorting performed in SQL.
-
-        ``group_id``: when provided, restrict to that group.
-        ``due_on``:   when provided, only tasks with that exact due_date.
-        ``sort_by_date``: order by due_date ascending (NULLs last), then title.
-        """
+        """List tasks. Filtering/sorting performed in SQL."""
         clauses: list[str] = []
         params: list = []
         if group_id is not None:
@@ -162,7 +185,8 @@ class Database:
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         if sort_by_date:
             order = (
-                "ORDER BY (due_date IS NULL), due_date ASC, title COLLATE NOCASE ASC"
+                "ORDER BY (due_date IS NULL), due_date ASC, "
+                "(due_time IS NULL), due_time ASC, title COLLATE NOCASE ASC"
             )
         else:
             order = "ORDER BY completed ASC, id DESC"
@@ -175,12 +199,14 @@ class Database:
             raise ValueError("task.id required for update")
         with self._tx() as cur:
             cur.execute(
-                "UPDATE tasks SET title = ?, group_id = ?, due_date = ?, "
-                "completed = ? WHERE id = ?",
+                "UPDATE tasks SET title = ?, description = ?, group_id = ?, "
+                "due_date = ?, due_time = ?, completed = ? WHERE id = ?",
                 (
                     task.title,
+                    task.description,
                     task.group_id,
                     _date_to_iso(task.due_date),
+                    _time_to_iso(task.due_time),
                     int(task.completed),
                     task.id,
                 ),
@@ -191,6 +217,12 @@ class Database:
             cur.execute(
                 "UPDATE tasks SET completed = ? WHERE id = ?",
                 (int(completed), task_id),
+            )
+
+    def set_task_group(self, task_id: int, group_id: Optional[int]) -> None:
+        with self._tx() as cur:
+            cur.execute(
+                "UPDATE tasks SET group_id = ? WHERE id = ?", (group_id, task_id)
             )
 
     def delete_task(self, task_id: int) -> None:
@@ -206,5 +238,13 @@ def _date_to_iso(value: Optional[date | str]) -> Optional[str]:
         return None
     if isinstance(value, date):
         return value.isoformat()
-    # Validate by round-tripping
     return date.fromisoformat(value).isoformat()
+
+
+def _time_to_iso(value: Optional[time | str]) -> Optional[str]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, time):
+        return value.strftime("%H:%M")
+    # Validate by round-tripping
+    return time.fromisoformat(value).strftime("%H:%M")
