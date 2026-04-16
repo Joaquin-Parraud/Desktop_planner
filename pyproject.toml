@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "desktop-planner"
+version = "0.1.0"
+description = "Native Linux desktop task planner (GTK4 + Libadwaita)"
+requires-python = ">=3.10"
+authors = [{ name = "Desktop Planner contributors" }]
+# PyGObject is provided by the system (python3-gi); not pip-installable
+# in a portable way, so it is intentionally not declared here.
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+desktop-planner = "desktop_planner.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["src"]

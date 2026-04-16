@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Planner
+GenericName=Task Planner
+Comment=Organize tasks with titles, dates, and groupings
+Exec=desktop-planner
+Icon=org.example.DesktopPlanner
+Terminal=false
+Categories=GTK;Office;ProjectManagement;
+StartupNotify=true
+Keywords=tasks;todo;planner;agenda;

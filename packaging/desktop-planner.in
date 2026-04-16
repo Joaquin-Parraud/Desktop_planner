@@ -1,0 +1,5 @@
+#!@PYTHON@
+import sys
+sys.path.insert(0, '@MODULE_DIR@')
+from desktop_planner.__main__ import main
+sys.exit(main())
