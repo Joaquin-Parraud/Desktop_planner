@@ -24,6 +24,21 @@ def _db() -> Database:
 # Tasks
 # ---------------------------------------------------------------------------
 
+def _task_dict(t) -> dict:
+    return {
+        "id": t.id,
+        "title": t.title,
+        "description": t.description,
+        "group_id": t.group_id,
+        "due_date": t.due_date_iso,
+        "due_time": t.due_time_iso,
+        "completed": t.completed,
+        "important": t.important,
+        "repeat": t.repeat,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+    }
+
+
 @mcp.tool()
 def list_tasks(
     group_id: Optional[int] = None,
@@ -37,19 +52,7 @@ def list_tasks(
             due_on=due_date,
             sort_by_date=sort_by_date,
         )
-    return [
-        {
-            "id": t.id,
-            "title": t.title,
-            "description": t.description,
-            "group_id": t.group_id,
-            "due_date": t.due_date_iso,
-            "due_time": t.due_time_iso,
-            "completed": t.completed,
-            "created_at": t.created_at.isoformat() if t.created_at else None,
-        }
-        for t in tasks
-    ]
+    return [_task_dict(t) for t in tasks]
 
 
 @mcp.tool()
@@ -59,16 +62,7 @@ def get_task(task_id: int) -> dict:
         task = db.get_task(task_id)
     if task is None:
         raise ValueError(f"Task {task_id} not found")
-    return {
-        "id": task.id,
-        "title": task.title,
-        "description": task.description,
-        "group_id": task.group_id,
-        "due_date": task.due_date_iso,
-        "due_time": task.due_time_iso,
-        "completed": task.completed,
-        "created_at": task.created_at.isoformat() if task.created_at else None,
-    }
+    return _task_dict(task)
 
 
 @mcp.tool()
@@ -78,6 +72,8 @@ def create_task(
     group_id: Optional[int] = None,
     due_date: Optional[str] = None,
     due_time: Optional[str] = None,
+    important: bool = False,
+    repeat: Optional[str] = None,
 ) -> dict:
     """Create a new task. Returns the created task with its assigned ID.
 
@@ -87,6 +83,8 @@ def create_task(
         group_id: ID of an existing group to assign the task to.
         due_date: ISO date string YYYY-MM-DD, e.g. "2025-06-01".
         due_time: 24-hour time string HH:MM, e.g. "14:30".
+        important: Mark the task as important (starred).
+        repeat: Recurrence rule — "daily", "weekly", "monthly", or "yearly".
     """
     with _db() as db:
         task = db.create_task(
@@ -95,17 +93,10 @@ def create_task(
             group_id=group_id,
             due_date=due_date,
             due_time=due_time,
+            important=important,
+            repeat=repeat,
         )
-    return {
-        "id": task.id,
-        "title": task.title,
-        "description": task.description,
-        "group_id": task.group_id,
-        "due_date": task.due_date_iso,
-        "due_time": task.due_time_iso,
-        "completed": task.completed,
-        "created_at": task.created_at.isoformat() if task.created_at else None,
-    }
+    return _task_dict(task)
 
 
 @mcp.tool()
@@ -117,12 +108,16 @@ def update_task(
     due_date: Optional[str] = None,
     due_time: Optional[str] = None,
     completed: Optional[bool] = None,
+    important: Optional[bool] = None,
+    repeat: Optional[str] = None,
 ) -> dict:
     """Update one or more fields of an existing task. Only provided fields are changed.
 
     Pass due_date="" or due_time="" to clear those fields.
     Pass group_id=0 to remove the task from its group.
+    Pass repeat="" to clear the repeat rule.
     """
+    import datetime as _dt
     with _db() as db:
         task = db.get_task(task_id)
         if task is None:
@@ -134,11 +129,15 @@ def update_task(
         if group_id is not None:
             task.group_id = group_id if group_id != 0 else None
         if due_date is not None:
-            task.due_date = None if due_date == "" else __import__("datetime").date.fromisoformat(due_date)
+            task.due_date = None if due_date == "" else _dt.date.fromisoformat(due_date)
         if due_time is not None:
-            task.due_time = None if due_time == "" else __import__("datetime").time.fromisoformat(due_time)
+            task.due_time = None if due_time == "" else _dt.time.fromisoformat(due_time)
         if completed is not None:
             task.completed = completed
+        if important is not None:
+            task.important = important
+        if repeat is not None:
+            task.repeat = repeat or None
         db.update_task(task)
     return get_task(task_id)
 
@@ -150,6 +149,16 @@ def complete_task(task_id: int, completed: bool = True) -> dict:
         if db.get_task(task_id) is None:
             raise ValueError(f"Task {task_id} not found")
         db.set_task_completed(task_id, completed)
+    return get_task(task_id)
+
+
+@mcp.tool()
+def set_task_important(task_id: int, important: bool = True) -> dict:
+    """Mark a task as important (starred) or not. Returns the updated task."""
+    with _db() as db:
+        if db.get_task(task_id) is None:
+            raise ValueError(f"Task {task_id} not found")
+        db.set_task_important(task_id, important)
     return get_task(task_id)
 
 

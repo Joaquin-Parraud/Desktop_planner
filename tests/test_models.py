@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import date, time
 
+import pytest
+
 from desktop_planner.models import Group, Task
 
 
@@ -40,3 +42,35 @@ def test_group_defaults():
     g = Group(id=None, name="Inbox")
     assert g.color.startswith("#")
     assert g.description == ""
+
+
+def test_task_important_default_false():
+    t = Task(id=None, title="x")
+    assert t.important is False
+
+
+def test_task_repeat_default_none():
+    t = Task(id=None, title="x")
+    assert t.repeat is None
+
+
+@pytest.mark.parametrize("repeat,base,expected", [
+    ("daily",   date(2026, 4, 20), date(2026, 4, 21)),
+    ("weekly",  date(2026, 4, 20), date(2026, 4, 27)),
+    ("monthly", date(2026, 1, 31), date(2026, 2, 28)),  # clamped to Feb end
+    ("monthly", date(2026, 3, 15), date(2026, 4, 15)),
+    ("yearly",  date(2026, 4, 20), date(2027, 4, 20)),
+])
+def test_next_repeat_date(repeat, base, expected):
+    t = Task(id=None, title="x", due_date=base, repeat=repeat)
+    assert t.next_repeat_date() == expected
+
+
+def test_next_repeat_date_no_due_date_returns_none():
+    t = Task(id=None, title="x", repeat="daily")
+    assert t.next_repeat_date() is None
+
+
+def test_next_repeat_date_no_repeat_returns_none():
+    t = Task(id=None, title="x", due_date=date(2026, 4, 20))
+    assert t.next_repeat_date() is None

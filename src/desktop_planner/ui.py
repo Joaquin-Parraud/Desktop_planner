@@ -13,7 +13,7 @@ from gi.repository import Adw, Gdk, GLib, GObject, Gio, Gtk  # noqa: E402
 from . import APP_ID
 from .database import Database
 from .dates import format_relative
-from .models import Group, Task
+from .models import Group, Task, REPEAT_CHOICES
 from .notifications import notify_tasks_due_today
 
 
@@ -108,9 +108,9 @@ def _make_color_draw(hex_color: str, *, shape: str = "circle"):
 # ---------------------------------------------------------------------------
 class TaskRow(Gtk.ListBoxRow):
     """A task row: checkbox + title (strikethrough when done) + date/time +
-    collapsible description (default collapsed) + delete."""
+    collapsible description (default collapsed) + star (important) + delete."""
 
-    def __init__(self, task: Task, on_toggle, on_delete):
+    def __init__(self, task: Task, on_toggle, on_delete, on_important):
         super().__init__()
         self.task = task
 
@@ -155,6 +155,13 @@ class TaskRow(Gtk.ListBoxRow):
                 stack.append(t_lbl)
             top.append(stack)
 
+        # Repeat indicator
+        if task.repeat:
+            repeat_icon = Gtk.Image.new_from_icon_name("media-playlist-repeat-symbolic")
+            repeat_icon.set_tooltip_text(f"Repeats {task.repeat}")
+            repeat_icon.add_css_class("dim-label")
+            top.append(repeat_icon)
+
         # Description revealer (default collapsed)
         self.desc_revealer: Optional[Gtk.Revealer] = None
         self.expand_btn: Optional[Gtk.ToggleButton] = None
@@ -184,6 +191,16 @@ class TaskRow(Gtk.ListBoxRow):
 
             self.expand_btn.connect("toggled", _on_expand_toggled)
             top.append(self.expand_btn)
+
+        # Important (star) toggle
+        self.star_btn = Gtk.ToggleButton(icon_name="starred-symbolic")
+        self.star_btn.add_css_class("flat")
+        self.star_btn.set_active(task.important)
+        self.star_btn.set_tooltip_text("Mark as important")
+        if task.important:
+            self.star_btn.add_css_class("accent")
+        self.star_btn.connect("toggled", lambda btn: on_important(task, btn.get_active()))
+        top.append(self.star_btn)
 
         delete_btn = Gtk.Button(icon_name="user-trash-symbolic")
         delete_btn.add_css_class("flat")
@@ -552,6 +569,24 @@ class TaskEditor(Adw.Window):
         self.group_dropdown.set_selected(selected_idx)
         content.append(_labelled("Group", self.group_dropdown))
 
+        # Repeat dropdown
+        _repeat_labels = ["No repeat"] + [r.capitalize() for r in REPEAT_CHOICES]
+        self.repeat_dropdown = Gtk.DropDown.new_from_strings(_repeat_labels)
+        repeat_idx = 0
+        if task and task.repeat:
+            try:
+                repeat_idx = REPEAT_CHOICES.index(task.repeat) + 1
+            except ValueError:
+                pass
+        self.repeat_dropdown.set_selected(repeat_idx)
+        content.append(_labelled("Repeat", self.repeat_dropdown))
+
+        # Important toggle
+        self.important_btn = Gtk.ToggleButton(label=" Important")
+        self.important_btn.set_icon_name("starred-symbolic")
+        self.important_btn.set_active(bool(task and task.important))
+        content.append(self.important_btn)
+
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         outer.append(header)
         outer.append(content)
@@ -589,6 +624,10 @@ class TaskEditor(Adw.Window):
         start, end = buf.get_bounds()
         return buf.get_text(start, end, False).strip()
 
+    def _read_repeat(self) -> Optional[str]:
+        idx = self.repeat_dropdown.get_selected()
+        return REPEAT_CHOICES[idx - 1] if idx > 0 else None
+
     def _on_save(self, *_):
         title = self.title_entry.get_text().strip()
         if not title:
@@ -598,6 +637,8 @@ class TaskEditor(Adw.Window):
         gid = self._selected_group_id()
         t = self._read_time()
         desc = self._read_description()
+        important = self.important_btn.get_active()
+        repeat = self._read_repeat()
         if self.task is None:
             self.db.create_task(
                 title=title,
@@ -605,6 +646,8 @@ class TaskEditor(Adw.Window):
                 due_date=due,
                 due_time=t,
                 description=desc,
+                important=important,
+                repeat=repeat,
             )
         else:
             self.task.title = title
@@ -612,6 +655,8 @@ class TaskEditor(Adw.Window):
             self.task.due_time = t
             self.task.group_id = gid
             self.task.description = desc
+            self.task.important = important
+            self.task.repeat = repeat
             self.db.update_task(self.task)
         self.saved = True
         self.close()
@@ -884,7 +929,7 @@ class MainWindow(Adw.ApplicationWindow):
         )
         for t in tasks:
             self.task_list.append(
-                TaskRow(t, self._on_task_toggle, self._on_task_delete)
+                TaskRow(t, self._on_task_toggle, self._on_task_delete, self._on_task_important)
             )
         self.task_stack.set_visible_child_name("list" if tasks else "empty")
 
@@ -912,6 +957,23 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _on_task_toggle(self, task: Task, completed: bool) -> None:
         self.db.set_task_completed(task.id, completed)
+        if completed and task.repeat:
+            next_date = task.next_repeat_date()
+            if next_date is not None:
+                self.db.create_task(
+                    title=task.title,
+                    group_id=task.group_id,
+                    due_date=next_date,
+                    due_time=task.due_time,
+                    description=task.description,
+                    important=task.important,
+                    repeat=task.repeat,
+                )
+        self.refresh_tasks()
+        self.refresh_sidebar()
+
+    def _on_task_important(self, task: Task, important: bool) -> None:
+        self.db.set_task_important(task.id, important)
         self.refresh_tasks()
         self.refresh_sidebar()
 

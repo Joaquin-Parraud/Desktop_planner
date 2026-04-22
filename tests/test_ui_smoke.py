@@ -180,3 +180,57 @@ def test_calendar_view_marks_days_with_group_colors(db):
     # The grid should contain a label for "April 2026"
     assert "April" in cal.month_label.get_text()
     assert "2026" in cal.month_label.get_text()
+
+
+def test_task_row_star_button_reflects_important(db):
+    from desktop_planner.ui import MainWindow, PlannerApp, TaskRow
+
+    db.create_task("urgent", important=True)
+    app = PlannerApp(db=db)
+    win = MainWindow(app, db)
+    row = win.task_list.get_row_at_index(0)
+    assert isinstance(row, TaskRow)
+    assert row.star_btn.get_active() is True
+
+
+def test_important_handler_updates_db(db):
+    from desktop_planner.ui import MainWindow, PlannerApp
+
+    t = db.create_task("star me")
+    app = PlannerApp(db=db)
+    win = MainWindow(app, db)
+
+    assert db.get_task(t.id).important is False
+    win._on_task_important(t, True)
+    assert db.get_task(t.id).important is True
+    win._on_task_important(t, False)
+    assert db.get_task(t.id).important is False
+
+
+def test_repeat_task_spawns_next_on_complete(db):
+    from datetime import date as _date
+
+    from desktop_planner.ui import MainWindow, PlannerApp
+
+    t = db.create_task("standup", repeat="daily", due_date=_date(2026, 4, 22))
+    app = PlannerApp(db=db)
+    win = MainWindow(app, db)
+
+    win._on_task_toggle(t, True)
+
+    tasks = db.list_tasks()
+    assert any(tk.repeat == "daily" and not tk.completed for tk in tasks)
+    next_task = next(tk for tk in tasks if not tk.completed and tk.repeat == "daily")
+    assert next_task.due_date == _date(2026, 4, 23)
+
+
+def test_repeat_task_no_spawn_when_no_due_date(db):
+    from desktop_planner.ui import MainWindow, PlannerApp
+
+    t = db.create_task("undated repeater", repeat="weekly")
+    app = PlannerApp(db=db)
+    win = MainWindow(app, db)
+
+    win._on_task_toggle(t, True)
+    # No new task should be created since there's no due_date to advance from
+    assert len(db.list_tasks()) == 1

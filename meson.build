@@ -12,6 +12,7 @@ py_sources = [
   'src/desktop_planner/__main__.py',
   'src/desktop_planner/database.py',
   'src/desktop_planner/dates.py',
+  'src/desktop_planner/mcp_server.py',
   'src/desktop_planner/models.py',
   'src/desktop_planner/notifications.py',
   'src/desktop_planner/paths.py',

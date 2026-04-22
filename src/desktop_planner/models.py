@@ -43,6 +43,9 @@ class Group:
         return cls(id=row["id"], name=row["name"], color=row["color"], description=desc)
 
 
+REPEAT_CHOICES: list[str] = ["daily", "weekly", "monthly", "yearly"]
+
+
 @dataclass
 class Task:
     id: Optional[int]
@@ -51,7 +54,9 @@ class Task:
     due_date: Optional[date] = None
     due_time: Optional[time] = None
     completed: bool = False
+    important: bool = False
     description: str = ""
+    repeat: Optional[str] = None  # "daily" | "weekly" | "monthly" | "yearly" | None
     created_at: Optional[datetime] = field(default=None)
 
     def __post_init__(self) -> None:
@@ -76,6 +81,14 @@ class Task:
             tval = row["due_time"]
         except (IndexError, KeyError):
             tval = None
+        try:
+            important = bool(row["important"])
+        except (IndexError, KeyError):
+            important = False
+        try:
+            repeat = row["repeat"] or None
+        except (IndexError, KeyError):
+            repeat = None
         return cls(
             id=row["id"],
             title=row["title"],
@@ -83,7 +96,9 @@ class Task:
             due_date=_parse_date(row["due_date"]),
             due_time=_parse_time(tval),
             completed=bool(row["completed"]),
+            important=important,
             description=desc,
+            repeat=repeat,
             created_at=created,
         )
 
@@ -94,3 +109,23 @@ class Task:
     @property
     def due_time_iso(self) -> Optional[str]:
         return self.due_time.strftime("%H:%M") if self.due_time else None
+
+    def next_repeat_date(self) -> Optional[date]:
+        """Return the next due date after applying the repeat rule, or None."""
+        if self.due_date is None or not self.repeat:
+            return None
+        from calendar import monthrange
+        from datetime import timedelta
+        d = self.due_date
+        if self.repeat == "daily":
+            return d + timedelta(days=1)
+        if self.repeat == "weekly":
+            return d + timedelta(weeks=1)
+        if self.repeat == "monthly":
+            y, m = d.year, d.month + 1
+            if m > 12:
+                y, m = y + 1, 1
+            return d.replace(year=y, month=m, day=min(d.day, monthrange(y, m)[1]))
+        if self.repeat == "yearly":
+            return d.replace(year=d.year + 1)
+        return None

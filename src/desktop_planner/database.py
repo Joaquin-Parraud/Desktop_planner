@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     due_date    TEXT,                  -- ISO 8601 (YYYY-MM-DD) or NULL
     due_time    TEXT,                  -- 'HH:MM' or NULL
     completed   INTEGER NOT NULL DEFAULT 0,
+    important   INTEGER NOT NULL DEFAULT 0,
+    repeat      TEXT,                  -- 'daily'|'weekly'|'monthly'|'yearly' or NULL
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -47,6 +49,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("groups", "description", "TEXT NOT NULL DEFAULT ''"),
     ("tasks", "description", "TEXT NOT NULL DEFAULT ''"),
     ("tasks", "due_time", "TEXT"),
+    ("tasks", "important", "INTEGER NOT NULL DEFAULT 0"),
+    ("tasks", "repeat", "TEXT"),
 ]
 
 
@@ -146,16 +150,18 @@ class Database:
         due_date: Optional[date | str] = None,
         due_time: Optional[time | str] = None,
         completed: bool = False,
+        important: bool = False,
         description: str = "",
+        repeat: Optional[str] = None,
     ) -> Task:
         iso_d = _date_to_iso(due_date)
         iso_t = _time_to_iso(due_time)
         with self._tx() as cur:
             cur.execute(
                 "INSERT INTO tasks "
-                "(title, description, group_id, due_date, due_time, completed) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (title, description, group_id, iso_d, iso_t, int(completed)),
+                "(title, description, group_id, due_date, due_time, completed, important, repeat) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (title, description, group_id, iso_d, iso_t, int(completed), int(important), repeat),
             )
             tid = cur.lastrowid
             row = cur.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone()
@@ -185,11 +191,11 @@ class Database:
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         if sort_by_date:
             order = (
-                "ORDER BY (due_date IS NULL), due_date ASC, "
+                "ORDER BY completed ASC, (due_date IS NULL), due_date ASC, "
                 "(due_time IS NULL), due_time ASC, title COLLATE NOCASE ASC"
             )
         else:
-            order = "ORDER BY completed ASC, id DESC"
+            order = "ORDER BY completed ASC, important DESC, id DESC"
         sql = f"SELECT * FROM tasks {where} {order}"
         cur = self._conn.execute(sql, params)
         return [Task.from_row(r) for r in cur.fetchall()]
@@ -200,7 +206,8 @@ class Database:
         with self._tx() as cur:
             cur.execute(
                 "UPDATE tasks SET title = ?, description = ?, group_id = ?, "
-                "due_date = ?, due_time = ?, completed = ? WHERE id = ?",
+                "due_date = ?, due_time = ?, completed = ?, important = ?, repeat = ? "
+                "WHERE id = ?",
                 (
                     task.title,
                     task.description,
@@ -208,6 +215,8 @@ class Database:
                     _date_to_iso(task.due_date),
                     _time_to_iso(task.due_time),
                     int(task.completed),
+                    int(task.important),
+                    task.repeat,
                     task.id,
                 ),
             )
@@ -217,6 +226,13 @@ class Database:
             cur.execute(
                 "UPDATE tasks SET completed = ? WHERE id = ?",
                 (int(completed), task_id),
+            )
+
+    def set_task_important(self, task_id: int, important: bool) -> None:
+        with self._tx() as cur:
+            cur.execute(
+                "UPDATE tasks SET important = ? WHERE id = ?",
+                (int(important), task_id),
             )
 
     def set_task_group(self, task_id: int, group_id: Optional[int]) -> None:

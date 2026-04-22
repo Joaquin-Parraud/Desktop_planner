@@ -193,7 +193,7 @@ def test_migration_adds_new_columns_to_legacy_db(tmp_path):
     with Database(path) as db:
         # New columns now exist:
         cols = {row["name"] for row in db._conn.execute("PRAGMA table_info(tasks)")}
-        assert {"description", "due_time"}.issubset(cols)
+        assert {"description", "due_time", "important", "repeat"}.issubset(cols)
         gcols = {row["name"] for row in db._conn.execute("PRAGMA table_info(groups)")}
         assert "description" in gcols
         # Legacy data still readable + defaults applied:
@@ -201,5 +201,52 @@ def test_migration_adds_new_columns_to_legacy_db(tmp_path):
         assert t.title == "old"
         assert t.description == ""
         assert t.due_time is None
+        assert t.important is False
+        assert t.repeat is None
         g = db.list_groups()[0]
         assert g.description == ""
+
+
+def test_important_flag_crud(db: Database):
+    t = db.create_task("star me")
+    assert t.important is False
+
+    db.set_task_important(t.id, True)
+    assert db.get_task(t.id).important is True
+
+    db.set_task_important(t.id, False)
+    assert db.get_task(t.id).important is False
+
+
+def test_important_tasks_sort_before_normal(db: Database):
+    db.create_task("normal")
+    imp = db.create_task("important")
+    db.set_task_important(imp.id, True)
+
+    titles = [t.title for t in db.list_tasks()]
+    assert titles.index("important") < titles.index("normal")
+
+
+def test_completed_tasks_sort_to_bottom(db: Database):
+    db.create_task("first")
+    done = db.create_task("done")
+    db.set_task_completed(done.id, True)
+    db.create_task("second")
+
+    titles = [t.title for t in db.list_tasks()]
+    assert titles[-1] == "done"
+
+
+def test_repeat_field_persists(db: Database):
+    t = db.create_task("daily standup", repeat="daily", due_date="2026-04-20")
+    assert t.repeat == "daily"
+    fresh = db.get_task(t.id)
+    assert fresh.repeat == "daily"
+
+    fresh.repeat = "weekly"
+    db.update_task(fresh)
+    assert db.get_task(t.id).repeat == "weekly"
+
+    fresh.repeat = None
+    db.update_task(fresh)
+    assert db.get_task(t.id).repeat is None
