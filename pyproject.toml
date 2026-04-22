@@ -14,9 +14,11 @@ dependencies = []
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+mcp = ["mcp>=1.0"]
 
 [project.scripts]
 desktop-planner = "desktop_planner.__main__:main"
+desktop-planner-mcp = "desktop_planner.mcp_server:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
